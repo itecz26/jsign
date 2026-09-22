@@ -243,6 +243,51 @@ public class PEFileTest {
     }
 
     @Test
+    public void testCertificateTableWithExtraData() throws Exception {
+        File sourceFile = new File("target/test-classes/wineyes.exe");
+        File targetFile = new File("target/test-classes/wineyes-cert-table-extra-data.exe");
+        FileUtils.copyFile(sourceFile, targetFile);
+
+        KeyStore keystore = new KeyStoreBuilder().keystore("target/test-classes/keystores/keystore.jks").storepass("password").build();
+        AuthenticodeSigner signer = new AuthenticodeSigner(keystore, "test", "password").withTimestamping(false);
+
+        long virtualAddress;
+        long size;
+        byte[] digest;
+        try (PEFile file = new PEFile(targetFile)) {
+            signer.sign(file);
+            assertSigned(file, SHA256);
+            DataDirectory certificateTable = file.getDataDirectory(DataDirectoryType.CERTIFICATE_TABLE);
+            virtualAddress = certificateTable.getVirtualAddress();
+            size = certificateTable.getSize();
+            digest = file.computeDigest(SHA256);
+        }
+
+        // append data at the end of the file and extend the certificate table over it
+        int extra = 32;
+        try (RandomAccessFile raf = new RandomAccessFile(targetFile, "rw")) {
+            raf.seek(raf.length());
+            raf.write(new byte[extra]);
+        }
+        try (PEFile file = new PEFile(targetFile)) {
+            file.getDataDirectory(DataDirectoryType.CERTIFICATE_TABLE).write(virtualAddress, (int) (size + extra));
+        }
+
+        try (PEFile file = new PEFile(targetFile)) {
+            // the appended data sits in the excluded certificate table area, so the file digest is unchanged
+            assertArrayEquals("digest", digest, file.computeDigest(SHA256));
+
+            // reading the signatures must fail instead of silently accepting the smuggled data
+            try {
+                file.getSignatures();
+                fail("The extra data in the certificate table was not detected");
+            } catch (IOException e) {
+                assertTrue(e.getMessage(), e.getMessage().contains("extra bytes after the signature"));
+            }
+        }
+    }
+
+    @Test
     public void testLoadEFISignatures() throws Exception {
         try (PEFile file = new PEFile(new File("target/test-classes/fbx64-signed-by-sbsign.efi"))) {
             assertEquals("Number of certificate table entries", 2, file.getCertificateTable().size());

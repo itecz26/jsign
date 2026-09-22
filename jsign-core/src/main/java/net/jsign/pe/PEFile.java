@@ -364,7 +364,7 @@ public class PEFile implements Signable {
         if (certificateTable != null && certificateTable.exists()) {
             long position = certificateTable.getVirtualAddress();
             long size = certificateTable.getSize();
-            
+
             try {
                 while (position < certificateTable.getVirtualAddress() + size) {
                     CertificateTableEntry entry = new CertificateTableEntry(this, position);
@@ -379,8 +379,18 @@ public class PEFile implements Signable {
             } catch (Exception e) {
                 e.printStackTrace();
             }
+
+            // reject a certificate table holding extra data after the signature. The digest excludes the whole
+            // certificate table as declared by the data directory, so trailing bytes there aren't covered by the
+            // signature and could be used to smuggle content into a validly signed file (CVE-2013-3900).
+            if (!isEFI() && !entries.isEmpty()) {
+                long signatureSize = (entries.get(0).getSize() + 7) & ~7L;
+                if (signatureSize < size) {
+                    throw new IOException("The certificate table contains " + (size - signatureSize) + " extra bytes after the signature");
+                }
+            }
         }
-        
+
         return entries;
     }
 
