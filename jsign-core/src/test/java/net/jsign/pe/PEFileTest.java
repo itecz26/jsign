@@ -32,6 +32,9 @@ import org.junit.Test;
 import net.jsign.AuthenticodeSigner;
 import net.jsign.KeyStoreBuilder;
 import net.jsign.WindowsReadOnlyFileLock;
+import net.jsign.verify.CheckResult;
+import net.jsign.verify.SignatureVerifier;
+import net.jsign.verify.VerificationResult;
 
 import static net.jsign.DigestAlgorithm.*;
 import static net.jsign.SignatureAssert.*;
@@ -257,6 +260,7 @@ public class PEFileTest {
         try (PEFile file = new PEFile(targetFile)) {
             signer.sign(file);
             assertSigned(file, SHA256);
+            assertEquals("trailing bytes", 0, file.getCertificateTableTrailingBytes());
             DataDirectory certificateTable = file.getDataDirectory(DataDirectoryType.CERTIFICATE_TABLE);
             virtualAddress = certificateTable.getVirtualAddress();
             size = certificateTable.getSize();
@@ -277,13 +281,23 @@ public class PEFileTest {
             // the appended data sits in the excluded certificate table area, so the file digest is unchanged
             assertArrayEquals("digest", digest, file.computeDigest(SHA256));
 
-            // reading the signatures must fail instead of silently accepting the smuggled data
-            try {
-                file.getSignatures();
-                fail("The extra data in the certificate table was not detected");
-            } catch (IOException e) {
-                assertTrue(e.getMessage(), e.getMessage().contains("extra bytes after the signature"));
+            // the signature is still readable, but the extra data is now reported
+            assertEquals("number of signatures", 1, file.getSignatures().size());
+            assertEquals("trailing bytes", extra, file.getCertificateTableTrailingBytes());
+
+            // the verification fails because of the smuggled data
+            VerificationResult result = new SignatureVerifier().verify(file);
+            assertFalse("valid signature", result.isValid());
+
+            CheckResult check = null;
+            for (CheckResult c : result.getSignatureVerifications().get(0).getChecks()) {
+                if ("Certificate Table".equals(c.getRule())) {
+                    check = c;
+                }
             }
+            assertNotNull("missing certificate table check", check);
+            assertEquals("verification status", CheckResult.Status.FAILED, check.getStatus());
+            assertEquals("verification message", "The certificate table contains " + extra + " extra bytes after the signature", check.getMessage());
         }
     }
 

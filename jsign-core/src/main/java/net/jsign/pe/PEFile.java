@@ -360,7 +360,7 @@ public class PEFile implements Signable {
     synchronized List<CertificateTableEntry> getCertificateTable() throws IOException {
         List<CertificateTableEntry> entries = new ArrayList<>();
         DataDirectory certificateTable = getDataDirectory(DataDirectoryType.CERTIFICATE_TABLE);
-        
+
         if (certificateTable != null && certificateTable.exists()) {
             long position = certificateTable.getVirtualAddress();
             long size = certificateTable.getSize();
@@ -379,19 +379,33 @@ public class PEFile implements Signable {
             } catch (Exception e) {
                 e.printStackTrace();
             }
-
-            // reject a certificate table holding extra data after the signature. The digest excludes the whole
-            // certificate table as declared by the data directory, so trailing bytes there aren't covered by the
-            // signature and could be used to smuggle content into a validly signed file (CVE-2013-3900).
-            if (!isEFI() && !entries.isEmpty()) {
-                long signatureSize = (entries.get(0).getSize() + 7) & ~7L;
-                if (signatureSize < size) {
-                    throw new IOException("The certificate table contains " + (size - signatureSize) + " extra bytes after the signature");
-                }
-            }
         }
 
         return entries;
+    }
+
+    /**
+     * Returns the number of extra bytes in the certificate table after the signature. The digest excludes the whole
+     * certificate table region declared by the data directory, so any trailing bytes there aren't covered by the
+     * signature and could be used to smuggle content into a validly signed file (CVE-2013-3900). This only applies to
+     * regular Authenticode signatures, EFI binaries are allowed to hold multiple entries in the certificate table.
+     *
+     * @return the number of unsigned bytes after the signature, or 0 if the certificate table is well formed
+     * @throws IOException if an I/O error occurs
+     */
+    public synchronized long getCertificateTableTrailingBytes() throws IOException {
+        DataDirectory certificateTable = getDataDirectory(DataDirectoryType.CERTIFICATE_TABLE);
+        if (certificateTable == null || !certificateTable.exists() || isEFI()) {
+            return 0;
+        }
+
+        List<CertificateTableEntry> entries = getCertificateTable();
+        if (entries.isEmpty()) {
+            return 0;
+        }
+
+        long signatureSize = (entries.get(0).getSize() + 7) & ~7L;
+        return Math.max(0, certificateTable.getSize() - signatureSize);
     }
 
     /**
